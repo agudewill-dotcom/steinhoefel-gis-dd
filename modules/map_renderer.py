@@ -187,35 +187,6 @@ def render_map(df: pd.DataFrame, parcels_gdf=None, infra_gdf=None, color_mode='c
                 show=True,
             ).add_to(m)
 
-    # --- Legend (with explicit dark text) ---
-    if color_mode == 'category':
-        legend_items = [(k.replace('_', ' ').title(), v) for k, v in CATEGORY_COLORS.items()]
-        title = 'Category'
-    elif color_mode == 'status':
-        legend_items = [(k.replace('_', ' ').title(), v) for k, v in STATUS_COLORS.items()]
-        title = 'Secured Status'
-    else:
-        legend_items = []
-        title = ''
-
-    if legend_items:
-        html = (
-            '<div style="position:fixed; bottom:30px; left:30px; z-index:9999; '
-            'background:white; padding:12px 14px; border:1px solid #999; border-radius:5px; '
-            'font-size:12px; font-family:sans-serif; box-shadow:2px 2px 6px rgba(0,0,0,0.3); '
-            'color:#000000 !important;">'
-        )
-        html += f'<b style="color:#000000;">{title}</b><br>'
-        for label, color in legend_items:
-            html += (
-                f'<div style="margin-top:4px; color:#000000;">'
-                f'<i style="background:{color}; width:14px; height:14px; '
-                f'display:inline-block; margin-right:6px; border-radius:2px; '
-                f'vertical-align:middle;"></i>'
-                f'<span style="color:#000000;">{label}</span></div>'
-            )
-        html += '</div>'
-        m.get_root().html.add_child(folium.Element(html))
 
     folium.LayerControl(collapsed=False).add_to(m)
     return m

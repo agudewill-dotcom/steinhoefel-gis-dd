@@ -15,7 +15,7 @@ from modules.import_excel import read_excel_file, auto_detect_columns, render_co
 from modules.import_gis import import_gis_file, render_crs_selector, render_layer_mapping_ui, classify_and_split, try_extract_parcel_ids_from_gis
 from modules.online_gis_fetcher import fetch_brandenburg_alkis_parcels, get_aoi_bounds, normalize_online_parcel_identifiers
 from modules.validation_engine import run_validations, get_issues_summary, get_financing_critical
-from modules.map_renderer import render_map, COLOR_MODES, search_data
+from modules.map_renderer import render_map, COLOR_MODES, CATEGORY_COLORS, STATUS_COLORS, search_data
 from modules.exporter import render_download_buttons
 from streamlit_folium import st_folium
 
@@ -253,9 +253,41 @@ class SteinhoefelApp:
                 else:
                     all_parcels = st.session_state.unmatched_parcels_gdf
             
-            # Render map
-            m = render_map(map_df, all_parcels, st.session_state.infra_gdf, color_mode)
-            st_folium(m, width=1200, height=600, returned_objects=[])
+            # Render map + legend side by side
+            map_col, legend_col = st.columns([5, 1])
+            with map_col:
+                m = render_map(map_df, all_parcels, st.session_state.infra_gdf, color_mode)
+                st_folium(m, width=None, height=600, returned_objects=[])
+            with legend_col:
+                if color_mode == 'category':
+                    items = CATEGORY_COLORS
+                    title = "Category"
+                elif color_mode == 'status':
+                    items = STATUS_COLORS
+                    title = "Secured Status"
+                else:
+                    items = {}
+                    title = "Owner"
+                
+                legend_html = f'<div style="padding:10px; border:1px solid #ddd; border-radius:6px; background:rgba(255,255,255,0.05);">'
+                legend_html += f'<b>{title}</b><br><br>'
+                if items:
+                    for key, color in items.items():
+                        label = key.replace('_', ' ').title()
+                        legend_html += (
+                            f'<div style="margin-bottom:6px; display:flex; align-items:center;">'
+                            f'<span style="background:{color}; width:16px; height:16px; '
+                            f'display:inline-block; margin-right:8px; border-radius:3px; '
+                            f'border:1px solid rgba(0,0,0,0.15); flex-shrink:0;"></span>'
+                            f'<span style="font-size:13px;">{label}</span></div>'
+                        )
+                else:
+                    legend_html += '<span style="font-size:12px; opacity:0.7;">Each owner gets a unique color.</span>'
+                legend_html += '<br><div style="margin-top:4px; display:flex; align-items:center;">'
+                legend_html += '<span style="background:#CCCCCC; width:16px; height:16px; display:inline-block; margin-right:8px; border-radius:3px; border:1px solid rgba(0,0,0,0.15); flex-shrink:0;"></span>'
+                legend_html += '<span style="font-size:13px;">Not in Excel</span></div>'
+                legend_html += '</div>'
+                st.markdown(legend_html, unsafe_allow_html=True)
             
             # Online GIS info (collapsed by default)
             if _is_gdf_valid(st.session_state.online_parcels_gdf):
