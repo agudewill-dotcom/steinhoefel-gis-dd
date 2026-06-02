@@ -1,0 +1,10 @@
+streamlit>=1.30.0
+pandas>=2.0.0
+geopandas>=0.14.0
+shapely>=2.0.0
+pyproj>=3.6.0
+folium>=0.15.0
+streamlit-folium>=0.17.0
+openpyxl>=3.1.0
+ezdxf>=0.19.0
+lxml>=4.9.0
