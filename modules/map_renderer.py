@@ -188,7 +188,6 @@ def render_map(df: pd.DataFrame, parcels_gdf=None, infra_gdf=None, color_mode='c
             ).add_to(m)
 
 
-    folium.LayerControl(collapsed=False).add_to(m)
     return m
 
 
