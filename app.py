@@ -156,26 +156,49 @@ class SteinhoefelApp:
                 st.rerun()
 
     def render_kpis(self, df: pd.DataFrame):
-        kpis = get_sample_kpis(df)
         st.markdown("<h2 class='main-header'>Portfolio Overview</h2>", unsafe_allow_html=True)
         
-        def card(col, val, label):
-            col.markdown(f'<div class="kpi-card"><div class="kpi-value">{val}</div><div class="kpi-label">{label}</div></div>', unsafe_allow_html=True)
-            
-        c1, c2, c3, c4, c5 = st.columns(5)
-        card(c1, kpis['total_rows'], "Total Rows")
-        card(c2, kpis['unique_parcel_uids'], "Unique Parcels")
-        card(c3, kpis['status_counts'].get('secured', 0), "Secured Parcels")
-        card(c4, len(kpis['owner_counts']), "Unique Owners")
-        card(c5, kpis['deed_rows'], "With Deed Ref")
+        def card(col, val, label, color=None):
+            border = f"border-top: 3px solid {color};" if color else "border-top: 3px solid #2E86C1;"
+            col.markdown(f'<div class="kpi-card" style="{border}"><div class="kpi-value">{val}</div><div class="kpi-label">{label}</div></div>', unsafe_allow_html=True)
+
+        total = df['parcel_uid'].nunique() if 'parcel_uid' in df.columns else 0
+        secured = int((df.drop_duplicates('parcel_uid')['secured_status'] == 'secured').sum()) if 'secured_status' in df.columns and 'parcel_uid' in df.columns else 0
+        in_progress = int((df.drop_duplicates('parcel_uid')['secured_status'] == 'in_progress').sum()) if 'secured_status' in df.columns and 'parcel_uid' in df.columns else 0
+        unsecured = total - secured - in_progress
+        pct = f"{round(secured / total * 100)}%" if total > 0 else "-"
+
+        n_pv = int((df['category'] == 'pv_plant').sum()) if 'category' in df.columns else 0
+        n_cable = int((df['category'] == 'cable').sum()) if 'category' in df.columns else 0
+        n_access = int((df['category'] == 'access_road').sum()) if 'category' in df.columns else 0
+
+        deed_missing = 0
+        if 'secured_status' in df.columns and 'deed_reference' in df.columns:
+            secured_rows = df[df['secured_status'] == 'secured']
+            deed_missing = int(secured_rows['deed_reference'].apply(lambda x: str(x).strip() in ('', '-', 'nan', 'None')).sum())
+
+        rank_pending = 0
+        if 'rank_subordination_required' in df.columns and 'rank_subordination_status' in df.columns:
+            has_req = df['rank_subordination_required'].apply(lambda x: str(x).strip() not in ('', '-', 'nan', 'None', 'n/a'))
+            has_status = df['rank_subordination_status'].apply(lambda x: str(x).strip() not in ('', '-', 'nan', 'None', 'n/a'))
+            rank_pending = int((has_req & ~has_status).sum())
+
+        # Row 1: Core parcel status
+        c1, c2, c3, c4 = st.columns(4)
+        card(c1, total, "Unique Parcels")
+        card(c2, f"{secured} ({pct})", "Secured", "#27AE60")
+        card(c3, in_progress, "In Progress", "#F39C12")
+        card(c4, unsecured, "Unsecured / Unclear", "#E74C3C")
         
         st.write("")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        card(c1, kpis['cat_counts'].get('pv_plant', 0), "PV Rows")
-        card(c2, kpis['cat_counts'].get('cable', 0), "Cable Rows")
-        card(c3, kpis['land_reg_rows'], "With Land Reg Date")
-        card(c4, kpis['rank_sub_rows'], "Rank Sub. Required")
-        card(c5, kpis['baulast_rows'], "With Baulast")
+
+        # Row 2: Categories & risk
+        c1, c2, c3, c4 = st.columns(4)
+        card(c1, n_pv, "PV Parcels", "#FFD700")
+        card(c2, n_cable, "Cable Parcels", "#FF4500")
+        card(c3, n_access, "Access Road Parcels", "#8B4513")
+        card(c4, deed_missing, "Secured w/o Deed", "#E74C3C" if deed_missing > 0 else "#27AE60")
+
         st.write("")
 
     def run(self):
