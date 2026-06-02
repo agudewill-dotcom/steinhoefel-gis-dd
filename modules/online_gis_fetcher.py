@@ -101,13 +101,13 @@ def get_aoi_bounds(uploaded_gdf, buffer_m=500):
         bounds = aoi.bounds  # shapely returns (minx, miny, maxx, maxy) tuple
         return bounds[0], bounds[1], bounds[2], bounds[3], "urn:ogc:def:crs:EPSG::25833"
     else:
-        # Fallback: Steinhöfel area — large radius to cover the full project
+        # Fallback: Steinhöfel area — large radius to cover full project (incl. Fürstenwalde, A12)
         center = gpd.GeoSeries(
             gpd.points_from_xy([_STEINHOEFEL_LON], [_STEINHOEFEL_LAT]),
             crs="EPSG:4326"
         )
         center_25833 = center.to_crs("EPSG:25833")
-        aoi_bounds = center_25833.buffer(15000).total_bounds  # 15km radius
+        aoi_bounds = center_25833.buffer(25000).total_bounds  # 25km radius
         return float(aoi_bounds[0]), float(aoi_bounds[1]), float(aoi_bounds[2]), float(aoi_bounds[3]), "urn:ogc:def:crs:EPSG::25833"
 
 
