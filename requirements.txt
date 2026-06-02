@@ -8,3 +8,4 @@ streamlit-folium>=0.17.0
 openpyxl>=3.1.0
 ezdxf>=0.19.0
 lxml>=4.9.0
+requests>=2.31.0
