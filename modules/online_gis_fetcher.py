@@ -150,14 +150,18 @@ def get_aoi_bounds(uploaded_gdf, buffer_m=500):
         bounds = aoi.bounds  # shapely returns (minx, miny, maxx, maxy) tuple
         return bounds[0], bounds[1], bounds[2], bounds[3], "urn:ogc:def:crs:EPSG::25833"
     else:
-        # Fallback: Steinhöfel area — large radius to cover full project (incl. Fürstenwalde, A12)
-        center = gpd.GeoSeries(
-            gpd.points_from_xy([_STEINHOEFEL_LON], [_STEINHOEFEL_LAT]),
-            crs="EPSG:4326"
-        )
-        center_25833 = center.to_crs("EPSG:25833")
-        aoi_bounds = center_25833.buffer(25000).total_bounds  # 25km radius
-        return float(aoi_bounds[0]), float(aoi_bounds[1]), float(aoi_bounds[2]), float(aoi_bounds[3]), "urn:ogc:def:crs:EPSG::25833"
+        # Precise bounding box for the Steinhöfel project area:
+        # Covers Gemarkungen: Demnitz, Steinhöfel, Heinersdorf, Hasenfelde,
+        # Neuendorf im Sande, Arensdorf, Tempelberg
+        # Coordinates in EPSG:25833 (meters)
+        # SW corner: ~14.05°E, 52.33°N  |  NE corner: ~14.28°E, 52.45°N
+        from shapely.geometry import box
+        sw = gpd.GeoSeries(gpd.points_from_xy([14.05], [52.33]), crs="EPSG:4326").to_crs("EPSG:25833")
+        ne = gpd.GeoSeries(gpd.points_from_xy([14.28], [52.45]), crs="EPSG:4326").to_crs("EPSG:25833")
+        sw_b = sw.total_bounds  # [minx, miny, ...]
+        ne_b = ne.total_bounds  # [..., maxx, maxy]
+        # Add small buffer
+        return float(sw_b[0] - 500), float(sw_b[1] - 500), float(ne_b[2] + 500), float(ne_b[3] + 500), "urn:ogc:def:crs:EPSG::25833"
 
 
 def _parse_national_cadastral_reference(ncr_value: str) -> tuple:
