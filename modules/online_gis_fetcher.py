@@ -19,95 +19,98 @@ WFS_URL = "https://inspire.brandenburg.de/services/cp_alkis_wfs"
 _STEINHOEFEL_LON = 14.17
 _STEINHOEFEL_LAT = 52.39
 
+_session = requests.Session()
 
-def _fetch_single_tile(minx, miny, maxx, maxy, crs_urn, target_crs, retries=2):
-    """Fetch a single WFS tile with retry."""
-    params = {
-        'service': 'WFS',
-        'version': '2.0.0',
-        'request': 'GetFeature',
-        'typeNames': 'cp:CadastralParcel',
-        'bbox': f"{minx},{miny},{maxx},{maxy},{crs_urn}",
-    }
-    
-    for attempt in range(retries + 1):
-        try:
-            response = requests.get(WFS_URL, params=params, timeout=90)
-            response.raise_for_status()
-            
-            content_str = response.content[:500].decode('utf-8', errors='ignore')
-            if '<ows:ExceptionReport' in content_str or '<ExceptionReport' in content_str:
-                return gpd.GeoDataFrame()
-            
-            gdf = gpd.read_file(io.BytesIO(response.content))
-            
-            if gdf.empty:
+def _fetch_single_bbox(minx, miny, maxx, maxy, crs_urn, target_crs, retries=2):
+    """Fetch a single WFS bbox. Tries JSON first (fast), falls back to GML."""
+    for fmt in ['application/json', None]:
+        params = {
+            'service': 'WFS',
+            'version': '2.0.0',
+            'request': 'GetFeature',
+            'typeNames': 'cp:CadastralParcel',
+            'bbox': f"{minx},{miny},{maxx},{maxy},{crs_urn}",
+        }
+        if fmt:
+            params['outputFormat'] = fmt
+        
+        for attempt in range(retries + 1):
+            try:
+                resp = _session.get(WFS_URL, params=params, timeout=120)
+                resp.raise_for_status()
+                
+                peek = resp.content[:300].decode('utf-8', errors='ignore')
+                if '<ows:ExceptionReport' in peek or '<ExceptionReport' in peek:
+                    break  # Try next format
+                
+                gdf = gpd.read_file(io.BytesIO(resp.content))
+                if gdf.empty:
+                    return gdf
+                if gdf.crs is None:
+                    gdf.set_crs("EPSG:25833", inplace=True)
+                if target_crs and str(gdf.crs) != target_crs:
+                    gdf = gdf.to_crs(target_crs)
                 return gdf
-                
-            if gdf.crs is None:
-                gdf.set_crs("EPSG:25833", inplace=True)
-                
-            if target_crs and str(gdf.crs) != target_crs:
-                gdf = gdf.to_crs(target_crs)
-                
-            return gdf
-        except Exception:
-            if attempt < retries:
-                import time
-                time.sleep(2)
-                continue
-            return gpd.GeoDataFrame()
+            except Exception:
+                if attempt < retries:
+                    import time
+                    time.sleep(1)
+                    continue
+                break  # Try next format
+    return gpd.GeoDataFrame()
 
 
 @st.cache_resource(show_spinner=False, ttl=3600)
 def fetch_brandenburg_alkis_parcels(minx, miny, maxx, maxy, crs_urn="urn:ogc:def:crs:EPSG::4326", target_crs="EPSG:4326"):
     """
     Fetches cadastral parcels from Brandenburg ALKIS WFS.
-    Splits large areas into a grid of smaller tiles (max ~10km each) to avoid connection resets.
+    Tries single request first; splits into tiles only if it fails.
     """
-    # Calculate tile size — max 10km per tile in EPSG:25833 (meters)
-    MAX_TILE = 10000
+    progress = st.progress(0, text="Fetching ALKIS parcels...")
+    
+    # Try single request first (fastest if server handles it)
+    progress.progress(0.3, text="Fetching ALKIS parcels (single request)...")
+    result = _fetch_single_bbox(minx, miny, maxx, maxy, crs_urn, target_crs)
+    if not result.empty:
+        progress.empty()
+        st.success(f"Fetched {len(result)} parcels.")
+        return result
+    
+    # Fallback: split into tiles
+    MAX_TILE = 20000  # 20km tiles
     width = maxx - minx
     height = maxy - miny
-    
     n_cols = max(1, int(width / MAX_TILE) + 1)
     n_rows = max(1, int(height / MAX_TILE) + 1)
-    
     tile_w = width / n_cols
     tile_h = height / n_rows
-    
     total_tiles = n_cols * n_rows
-    all_gdfs = []
-    progress = st.progress(0, text=f"Fetching ALKIS parcels (0/{total_tiles} tiles)...")
     
+    all_gdfs = []
     for r in range(n_rows):
         for c in range(n_cols):
-            tile_idx = r * n_cols + c + 1
-            progress.progress(tile_idx / total_tiles, text=f"Fetching ALKIS parcels ({tile_idx}/{total_tiles} tiles)...")
-            
-            t_minx = minx + c * tile_w
-            t_miny = miny + r * tile_h
-            t_maxx = minx + (c + 1) * tile_w
-            t_maxy = miny + (r + 1) * tile_h
-            
-            gdf = _fetch_single_tile(t_minx, t_miny, t_maxx, t_maxy, crs_urn, target_crs)
+            idx = r * n_cols + c + 1
+            progress.progress(idx / total_tiles, text=f"Fetching ALKIS parcels ({idx}/{total_tiles} tiles)...")
+            gdf = _fetch_single_bbox(
+                minx + c * tile_w, miny + r * tile_h,
+                minx + (c+1) * tile_w, miny + (r+1) * tile_h,
+                crs_urn, target_crs
+            )
             if not gdf.empty:
                 all_gdfs.append(gdf)
     
     progress.empty()
     
     if not all_gdfs:
-        st.error("Could not fetch any parcels from the WFS. The service may be temporarily unavailable.")
+        st.error("Could not fetch parcels. The WFS service may be temporarily unavailable.")
         return gpd.GeoDataFrame()
     
-    # Combine and deduplicate
     combined = pd.concat(all_gdfs, ignore_index=True)
-    # Drop duplicate geometries from overlapping tiles
-    if 'nationalCadastralReference' in combined.columns:
-        combined = combined.drop_duplicates(subset=['nationalCadastralReference'], keep='first')
-    elif 'inspireid' in [c.lower() for c in combined.columns]:
-        id_col = [c for c in combined.columns if c.lower() == 'inspireid'][0]
-        combined = combined.drop_duplicates(subset=[id_col], keep='first')
+    # Deduplicate
+    for col in combined.columns:
+        if 'cadastralreference' in col.lower() or 'inspireid' in col.lower():
+            combined = combined.drop_duplicates(subset=[col], keep='first')
+            break
     
     st.success(f"Fetched {len(combined)} parcels from {total_tiles} tiles.")
     return combined
