@@ -20,12 +20,8 @@ _STEINHOEFEL_LON = 14.17
 _STEINHOEFEL_LAT = 52.39
 
 
-@st.cache_resource(show_spinner=False, ttl=3600)
-def fetch_brandenburg_alkis_parcels(minx, miny, maxx, maxy, crs_urn="urn:ogc:def:crs:EPSG::4326", target_crs="EPSG:4326"):
-    """
-    Fetches cadastral parcels from Brandenburg ALKIS WFS within a bounding box.
-    Uses cache_resource instead of cache_data to avoid GeoDataFrame serialization issues.
-    """
+def _fetch_single_tile(minx, miny, maxx, maxy, crs_urn, target_crs, retries=2):
+    """Fetch a single WFS tile with retry."""
     params = {
         'service': 'WFS',
         'version': '2.0.0',
@@ -34,34 +30,87 @@ def fetch_brandenburg_alkis_parcels(minx, miny, maxx, maxy, crs_urn="urn:ogc:def
         'bbox': f"{minx},{miny},{maxx},{maxy},{crs_urn}",
     }
     
-    try:
-        response = requests.get(WFS_URL, params=params, timeout=120)
-        response.raise_for_status()
-        
-        # Check for WFS exception response
-        content_str = response.content[:500].decode('utf-8', errors='ignore')
-        if '<ows:ExceptionReport' in content_str or '<ExceptionReport' in content_str:
-            st.error(f"WFS returned an exception. First 200 chars: {content_str[:200]}")
-            return gpd.GeoDataFrame()
-        
-        gdf = gpd.read_file(io.BytesIO(response.content))
-        
-        if gdf.empty:
+    for attempt in range(retries + 1):
+        try:
+            response = requests.get(WFS_URL, params=params, timeout=90)
+            response.raise_for_status()
+            
+            content_str = response.content[:500].decode('utf-8', errors='ignore')
+            if '<ows:ExceptionReport' in content_str or '<ExceptionReport' in content_str:
+                return gpd.GeoDataFrame()
+            
+            gdf = gpd.read_file(io.BytesIO(response.content))
+            
+            if gdf.empty:
+                return gdf
+                
+            if gdf.crs is None:
+                gdf.set_crs("EPSG:25833", inplace=True)
+                
+            if target_crs and str(gdf.crs) != target_crs:
+                gdf = gdf.to_crs(target_crs)
+                
             return gdf
+        except Exception:
+            if attempt < retries:
+                import time
+                time.sleep(2)
+                continue
+            return gpd.GeoDataFrame()
+
+
+@st.cache_resource(show_spinner=False, ttl=3600)
+def fetch_brandenburg_alkis_parcels(minx, miny, maxx, maxy, crs_urn="urn:ogc:def:crs:EPSG::4326", target_crs="EPSG:4326"):
+    """
+    Fetches cadastral parcels from Brandenburg ALKIS WFS.
+    Splits large areas into a grid of smaller tiles (max ~10km each) to avoid connection resets.
+    """
+    # Calculate tile size — max 10km per tile in EPSG:25833 (meters)
+    MAX_TILE = 10000
+    width = maxx - minx
+    height = maxy - miny
+    
+    n_cols = max(1, int(width / MAX_TILE) + 1)
+    n_rows = max(1, int(height / MAX_TILE) + 1)
+    
+    tile_w = width / n_cols
+    tile_h = height / n_rows
+    
+    total_tiles = n_cols * n_rows
+    all_gdfs = []
+    progress = st.progress(0, text=f"Fetching ALKIS parcels (0/{total_tiles} tiles)...")
+    
+    for r in range(n_rows):
+        for c in range(n_cols):
+            tile_idx = r * n_cols + c + 1
+            progress.progress(tile_idx / total_tiles, text=f"Fetching ALKIS parcels ({tile_idx}/{total_tiles} tiles)...")
             
-        if gdf.crs is None:
-            gdf.set_crs("EPSG:25833", inplace=True)
+            t_minx = minx + c * tile_w
+            t_miny = miny + r * tile_h
+            t_maxx = minx + (c + 1) * tile_w
+            t_maxy = miny + (r + 1) * tile_h
             
-        if target_crs and str(gdf.crs) != target_crs:
-            gdf = gdf.to_crs(target_crs)
-            
-        return gdf
-    except requests.exceptions.Timeout:
-        st.error("WFS request timed out after 120 seconds. The service may be overloaded.")
+            gdf = _fetch_single_tile(t_minx, t_miny, t_maxx, t_maxy, crs_urn, target_crs)
+            if not gdf.empty:
+                all_gdfs.append(gdf)
+    
+    progress.empty()
+    
+    if not all_gdfs:
+        st.error("Could not fetch any parcels from the WFS. The service may be temporarily unavailable.")
         return gpd.GeoDataFrame()
-    except Exception as e:
-        st.error(f"Error fetching WFS: {str(e)}")
-        return gpd.GeoDataFrame()
+    
+    # Combine and deduplicate
+    combined = pd.concat(all_gdfs, ignore_index=True)
+    # Drop duplicate geometries from overlapping tiles
+    if 'nationalCadastralReference' in combined.columns:
+        combined = combined.drop_duplicates(subset=['nationalCadastralReference'], keep='first')
+    elif 'inspireid' in [c.lower() for c in combined.columns]:
+        id_col = [c for c in combined.columns if c.lower() == 'inspireid'][0]
+        combined = combined.drop_duplicates(subset=[id_col], keep='first')
+    
+    st.success(f"Fetched {len(combined)} parcels from {total_tiles} tiles.")
+    return combined
 
 
 def detect_parcel_identifier_columns(gdf: gpd.GeoDataFrame) -> dict:
